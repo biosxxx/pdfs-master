@@ -15,6 +15,81 @@ This repository is a small workspace with one main app and two integration surfa
 - `static/utilities/pdf-master/` - built static output.
 - `pdf-master-technical-spec.md` - original technical task and feature scope notes.
 
+### ASCII file tree
+
+```text
+pdfs-master/
+|-- README.md
+|-- readmi.md
+|-- package.json
+|-- package-lock.json
+|-- app.html
+|-- pdf-master-technical-spec.md
+|-- apps/
+|   `-- pdf-master/
+|       |-- package.json
+|       |-- tsconfig.app.json
+|       |-- tsconfig.node.json
+|       |-- vite.config.ts
+|       `-- src/
+|           |-- app/
+|           |   |-- App.tsx
+|           |   `-- routes.ts
+|           |-- adapters/
+|           |   |-- reader/
+|           |   |   `-- pdfjsReader.ts
+|           |   `-- writer/
+|           |       `-- pdfLibWriter.ts
+|           |-- components/
+|           |   |-- ConfirmDialog/
+|           |   |-- DocumentList/
+|           |   |-- DropZone/
+|           |   |-- EmptyState/
+|           |   |-- ExportDialog/
+|           |   |-- Inspector/
+|           |   |-- Notifications/
+|           |   |-- PageGrid/
+|           |   |-- PdfViewerDialog/
+|           |   |-- StatusBar/
+|           |   `-- Toolbar/
+|           |-- domain/
+|           |   |-- commands.ts
+|           |   |-- errors.ts
+|           |   |-- types.ts
+|           |   `-- validation.ts
+|           |-- services/
+|           |   |-- exportPdf.ts
+|           |   |-- formService.ts
+|           |   |-- importPdf.ts
+|           |   |-- metadataService.ts
+|           |   |-- pdfInspection.ts
+|           |   |-- selectionService.ts
+|           |   `-- thumbnailQueue.ts
+|           |-- store/
+|           |   |-- pdfStore.ts
+|           |   `-- selectors.ts
+|           |-- test/
+|           |   |-- pdfFixtures.ts
+|           |   `-- setup.ts
+|           |-- workers/
+|           |   |-- export.worker.ts
+|           |   |-- ingest.worker.ts
+|           |   |-- protocols.ts
+|           |   `-- render.worker.ts
+|           |-- index.css
+|           `-- main.tsx
+|-- docs/
+|   `-- utilities/
+|       |-- pdf-master.mdx
+|       `-- pdf-master-ui-redesign.md
+|-- src/
+|   `-- components/
+|       `-- PdfMasterEmbed.tsx
+`-- static/
+    `-- utilities/
+        `-- pdf-master/
+```
+
 ## High-level architecture
 
 The app follows a practical layered structure:
@@ -364,6 +439,157 @@ Run these from `apps/pdf-master/`:
   - Starts Vitest in interactive mode.
 - `npm run test:run`
   - Runs Vitest once and exits.
+
+## Development Workflow
+
+This is a typical local workflow for working on the PDF Master app:
+
+1. Install dependencies from the repository root with `npm install`.
+2. Start the app with `npm run dev`.
+3. Open the local route shown by Vite, usually `/utilities/pdf-master/`.
+4. Make UI changes in `apps/pdf-master/src/components/` and app coordination changes in `apps/pdf-master/src/app/App.tsx`.
+5. Update state logic in `apps/pdf-master/src/store/` and pure business rules in `apps/pdf-master/src/domain/`.
+6. If the change affects PDF import, export, or preview rendering, also review `apps/pdf-master/src/services/`, `apps/pdf-master/src/adapters/`, and `apps/pdf-master/src/workers/`.
+7. Run `npm run lint` after code changes.
+8. Run `npm run test` to verify the workspace behavior.
+9. Run `npm run build` before shipping or pushing larger changes.
+10. If the public docs or host integration changed, update `docs/utilities/` and `src/components/PdfMasterEmbed.tsx`.
+
+Recommended development order:
+
+- Start with domain and state changes.
+- Connect them in services and workers if needed.
+- Finish with UI wiring and visual polish.
+- Verify import, thumbnail rendering, viewer behavior, selection, and export before committing.
+
+## Troubleshooting
+
+### Preview thumbnails stay in `RENDERING`
+
+Possible causes:
+
+- `render.worker.ts` did not respond in time.
+- The browser does not support the expected worker rendering path.
+- The current PDF is too heavy for the worker-side preview attempt.
+
+What to check:
+
+- Confirm that `apps/pdf-master/src/services/thumbnailQueue.ts` falls back to `PdfjsReader.renderPageThumbnail()`.
+- Check the browser console for worker load or message errors.
+- Re-import the file and confirm whether the page thumbnail state changes from `loading` to `ready` or `error`.
+
+Typical fix:
+
+- Keep the worker timeout and fallback path enabled.
+- If a browser-specific issue appears, prefer the main-thread fallback over leaving the UI in a permanent rendering state.
+
+### Thumbnails overflow their cards or do not fit the frame
+
+Possible causes:
+
+- Preview image dimensions do not match the current density layout.
+- CSS changed around the thumbnail container, image wrapper, or `object-fit` rules.
+
+What to check:
+
+- Review `apps/pdf-master/src/components/PageGrid/PageGrid.tsx`.
+- Confirm that the preview container uses a fixed visual frame and the image uses `object-contain`.
+- Verify that density-specific sizes still match the current card height.
+
+Typical fix:
+
+- Keep preview images inside a dedicated bounded area.
+- Use centered alignment with fixed frame dimensions instead of allowing image height to drive the card layout.
+
+### PDF.js worker errors in development
+
+Possible causes:
+
+- The `pdfjs-dist` worker bundle path is resolved incorrectly.
+- A custom worker is being started inside another worker context.
+- Vite asset resolution changed after a dependency update.
+
+What to check:
+
+- Review `apps/pdf-master/src/adapters/reader/pdfjsReader.ts` and `apps/pdf-master/src/workers/render.worker.ts`.
+- Confirm that nested PDF.js worker usage is disabled inside the custom render worker.
+- Check whether the console reports failed worker fetches or module loading errors.
+
+Typical fix:
+
+- Use a single clear PDF.js worker strategy.
+- Avoid spawning the default PDF.js worker inside `render.worker.ts`.
+- Rebuild after dependency changes with `npm run build` to verify asset output.
+
+### Worker-based preview works in one browser but not another
+
+Possible causes:
+
+- Different support levels for `OffscreenCanvas`, worker modules, or embedded PDF features.
+- Browser-specific security rules around worker execution or blob URLs.
+
+What to check:
+
+- Test the same file in Chrome, Edge, and Safari if available.
+- Confirm whether the app drops to the non-worker thumbnail fallback.
+- Check whether the built-in viewer works while thumbnails fail, or vice versa.
+
+Typical fix:
+
+- Treat worker rendering as an optimization, not a hard dependency.
+- Keep fallback rendering active and avoid blocking the workspace on advanced browser features.
+
+### Built-in viewer opens but search or text selection feels limited
+
+Possible causes:
+
+- The embedded browser PDF viewer depends on the browser engine.
+- Some browsers expose search, copy, and text selection differently inside embedded PDF surfaces.
+
+What to check:
+
+- Test the `Open in browser` action from the viewer dialog.
+- Compare embedded viewer behavior with a direct browser-tab PDF open.
+
+Typical fix:
+
+- Use the in-app viewer for fast inspection and page context.
+- Use `Open in browser` when full browser-native PDF controls are needed.
+
+### Export works but previews look stale after page changes
+
+Possible causes:
+
+- Cached thumbnail results were generated before reorder, rotation, or deletion.
+- The assembled viewer PDF cache was not invalidated after a workspace mutation.
+
+What to check:
+
+- Review cache invalidation in `apps/pdf-master/src/services/thumbnailQueue.ts`.
+- Review viewer cache state in `apps/pdf-master/src/app/App.tsx`.
+- Confirm that reorder, rotate, delete, and import operations increment or invalidate the relevant workspace revision.
+
+Typical fix:
+
+- Clear thumbnail and viewer cache entries whenever page structure changes.
+- Regenerate previews after document reorder, page reorder, page rotation, or delete operations.
+
+### Production build shows large chunk warnings
+
+Possible causes:
+
+- `pdfjs-dist` and worker bundles are large.
+- Viewer and export logic pull heavy PDF dependencies into the same build graph.
+
+What to check:
+
+- Run `npm run build` and inspect Vite warnings.
+- Review whether worker code and viewer code are split into separate chunks.
+
+Typical fix:
+
+- Use code-splitting for heavy PDF modules.
+- Keep workers isolated so the main UI bundle stays smaller.
 
 ## Testing
 
