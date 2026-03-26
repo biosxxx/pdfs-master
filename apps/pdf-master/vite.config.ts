@@ -7,17 +7,17 @@ import { defineConfig } from 'vitest/config';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  base: '/utilities/pdf-master/',
+  base: './',
   plugins: [react(), tailwindcss()],
   server: {
     host: '127.0.0.1',
     port: 5173,
-    open: '/utilities/pdf-master/',
+    open: '/app.html',
   },
   preview: {
     host: '127.0.0.1',
     port: 4173,
-    open: '/utilities/pdf-master/',
+    open: '/app.html',
   },
   resolve: {
     alias: {
@@ -27,6 +27,9 @@ export default defineConfig({
   build: {
     emptyOutDir: true,
     outDir: path.resolve(__dirname, '../../static/utilities/pdf-master'),
+    rollupOptions: {
+      input: path.resolve(__dirname, 'app.html'),
+    },
     sourcemap: true,
     target: 'es2022',
   },
