@@ -2,6 +2,7 @@
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'pdfjs-dist/types/src/display/api';
 import { ErrorCode, PdfMasterError, toErrorModel } from '@/domain/errors';
+import { getCanvas2dContextSettings, getThumbnailRenderEnvironment } from '@/utils/thumbnailRendering';
 import type {
   RenderWorkerCancelRequest,
   RenderWorkerMessage,
@@ -25,6 +26,7 @@ interface ActiveRender {
 
 const documentCache = new Map<string, CachedDocument>();
 const activeRenders = new Map<string, ActiveRender>();
+const renderEnvironment = getThumbnailRenderEnvironment();
 
 self.onmessage = async (event: MessageEvent<RenderWorkerMessage>) => {
   const message = event.data;
@@ -48,7 +50,7 @@ self.onmessage = async (event: MessageEvent<RenderWorkerMessage>) => {
 };
 
 async function renderThumbnail(message: RenderWorkerRequest): Promise<void> {
-  if (typeof OffscreenCanvas === 'undefined') {
+  if (!renderEnvironment.supportsOffscreenCanvas) {
     const response: RenderWorkerResponse = {
       type: 'render:unsupported',
       requestId: message.requestId,
@@ -68,6 +70,7 @@ async function renderThumbnail(message: RenderWorkerRequest): Promise<void> {
     aborted: false,
   };
   activeRenders.set(message.requestId, active);
+  let page: Awaited<ReturnType<PDFDocumentProxy['getPage']>> | null = null;
 
   try {
     const pdfDocument = await getDocument(message.documentId, message.file);
@@ -75,12 +78,12 @@ async function renderThumbnail(message: RenderWorkerRequest): Promise<void> {
       throw new DOMException('Thumbnail rendering canceled.', 'AbortError');
     }
 
-    const page = await pdfDocument.getPage(message.pageIndex + 1);
+    page = await pdfDocument.getPage(message.pageIndex + 1);
     const baseViewport = page.getViewport({ scale: 1 });
     const scale = Math.max(message.maxWidth / baseViewport.width, 0.2);
     const viewport = page.getViewport({ scale });
     const canvas = new OffscreenCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
-    const context = canvas.getContext('2d');
+    const context = canvas.getContext('2d', getCanvas2dContextSettings(renderEnvironment.supportsHardwareAcceleration));
 
     if (!context) {
       throw new PdfMasterError(
@@ -90,7 +93,7 @@ async function renderThumbnail(message: RenderWorkerRequest): Promise<void> {
     }
 
     const renderTask = page.render({
-      canvas: canvas as unknown as HTMLCanvasElement,
+      canvas: null,
       canvasContext: context as unknown as CanvasRenderingContext2D,
       viewport,
     });
@@ -111,7 +114,6 @@ async function renderThumbnail(message: RenderWorkerRequest): Promise<void> {
       height: canvas.height,
     };
     self.postMessage(response);
-    page.cleanup();
   } catch (error) {
     if (active.aborted) {
       return;
@@ -126,6 +128,7 @@ async function renderThumbnail(message: RenderWorkerRequest): Promise<void> {
     self.postMessage(response);
   } finally {
     activeRenders.delete(message.requestId);
+    page?.cleanup();
   }
 }
 
@@ -173,7 +176,8 @@ async function getDocument(documentId: string, file: File): Promise<PDFDocumentP
     data: bytes,
     disableWorker: true,
     useWorkerFetch: false,
-    isOffscreenCanvasSupported: true,
+    isOffscreenCanvasSupported: renderEnvironment.supportsOffscreenCanvas,
+    enableHWA: renderEnvironment.supportsHardwareAcceleration,
     stopAtErrors: false,
   } as Parameters<typeof pdfjs.getDocument>[0] & { disableWorker: boolean });
   const document = loadingTask.promise;

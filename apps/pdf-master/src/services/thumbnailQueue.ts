@@ -1,10 +1,11 @@
 import { ErrorCode, PdfMasterError } from '@/domain/errors';
 import type { PdfReader } from '@/domain/types';
-import type { RenderWorkerRequest, RenderWorkerResponse } from '@/workers/protocols';
+import type { RenderWorkerMessage, RenderWorkerRequest, RenderWorkerResponse } from '@/workers/protocols';
 import { createId } from '@/utils/ids';
 import { LruMap } from '@/utils/lru';
 import { makeObjectUrl, revokeObjectUrl } from '@/utils/objectUrl';
 import { PromiseQueue } from '@/utils/promiseQueue';
+import { getThumbnailRenderEnvironment } from '@/utils/thumbnailRendering';
 
 interface ThumbnailRequest {
   pageId: string;
@@ -14,10 +15,19 @@ interface ThumbnailRequest {
   maxWidth: number;
 }
 
+interface RenderWorkerClient {
+  id: number;
+  worker: Worker;
+  busy: boolean;
+  terminated: boolean;
+  handleMessage: (event: MessageEvent<RenderWorkerResponse>) => void;
+  handleError: (event: ErrorEvent) => void;
+}
+
 const WORKER_RENDER_TIMEOUT_MS = 4000;
 
 export class ThumbnailQueue {
-  private readonly queue = new PromiseQueue<string>(2);
+  private readonly queue: PromiseQueue<string>;
   private readonly cache = new LruMap<string, string>(180, (_key, url) => revokeObjectUrl(url));
   private readonly pending = new Map<
     string,
@@ -28,22 +38,28 @@ export class ThumbnailQueue {
       workerRequestId?: string;
     }
   >();
-  private readonly renderWorker =
-    typeof Worker !== 'undefined'
-      ? new Worker(new URL('../workers/render.worker.ts', import.meta.url), { type: 'module' })
-      : null;
+  private readonly renderWorkers: RenderWorkerClient[] = [];
   private readonly workerRequests = new Map<
     string,
     {
       resolve: (blob: Blob) => void;
       reject: (error: unknown) => void;
+      client: RenderWorkerClient;
     }
   >();
-  private workerAvailable = Boolean(this.renderWorker);
+  private readonly fallbackConcurrency: number;
+  private workerAvailable = false;
 
   constructor(private readonly reader: PdfReader) {
-    this.renderWorker?.addEventListener('message', this.handleWorkerMessage);
-    this.renderWorker?.addEventListener('error', this.handleWorkerError);
+    const renderEnvironment = getThumbnailRenderEnvironment();
+    this.fallbackConcurrency = renderEnvironment.fallbackConcurrency;
+    this.queue = new PromiseQueue<string>(renderEnvironment.maxParallelRenders);
+
+    for (let index = 0; index < renderEnvironment.workerPoolSize; index += 1) {
+      this.renderWorkers.push(this.createRenderWorker(index));
+    }
+
+    this.syncQueueConcurrency();
   }
 
   requestThumbnail(request: ThumbnailRequest): Promise<string> {
@@ -82,13 +98,6 @@ export class ThumbnailQueue {
   cancelPage(pageId: string): void {
     const pending = this.pending.get(pageId);
     if (pending) {
-      if (pending.workerRequestId) {
-        this.renderWorker?.postMessage({
-          type: 'render:cancel',
-          requestId: pending.workerRequestId,
-        });
-        this.workerRequests.delete(pending.workerRequestId);
-      }
       pending.controller.abort();
       this.pending.delete(pageId);
     }
@@ -97,43 +106,35 @@ export class ThumbnailQueue {
 
   cancelDocument(documentId: string): void {
     for (const [pageId, pending] of this.pending.entries()) {
-      if (pending.documentId === documentId) {
-        if (pending.workerRequestId) {
-          this.renderWorker?.postMessage({
-            type: 'render:cancel',
-            requestId: pending.workerRequestId,
-          });
-          this.workerRequests.delete(pending.workerRequestId);
-        }
-        pending.controller.abort();
-        this.pending.delete(pageId);
+      if (pending.documentId !== documentId) {
+        continue;
       }
+      pending.controller.abort();
+      this.pending.delete(pageId);
     }
-    this.renderWorker?.postMessage({ type: 'render:release-document', documentId });
+    this.broadcastToWorkers({ type: 'render:release-document', documentId });
     void this.reader.destroy(documentId);
   }
 
   clear(): void {
     for (const [pageId, pending] of this.pending.entries()) {
-      if (pending.workerRequestId) {
-        this.renderWorker?.postMessage({
-          type: 'render:cancel',
-          requestId: pending.workerRequestId,
-        });
-        this.workerRequests.delete(pending.workerRequestId);
-      }
       pending.controller.abort();
       this.pending.delete(pageId);
     }
-    this.renderWorker?.postMessage({ type: 'render:reset' });
+    this.broadcastToWorkers({ type: 'render:reset' });
     this.cache.clear();
   }
 
   dispose(): void {
     this.clear();
-    this.renderWorker?.removeEventListener('message', this.handleWorkerMessage);
-    this.renderWorker?.removeEventListener('error', this.handleWorkerError);
-    this.renderWorker?.terminate();
+    for (const client of this.getActiveWorkers()) {
+      client.worker.removeEventListener('message', client.handleMessage);
+      client.worker.removeEventListener('error', client.handleError);
+      client.worker.terminate();
+      client.busy = false;
+      client.terminated = true;
+    }
+    this.syncQueueConcurrency();
   }
 
   private async renderThumbnail(
@@ -141,7 +142,11 @@ export class ThumbnailQueue {
     controller: AbortController,
     workerRequestId: string,
   ): Promise<Blob> {
-    if (this.workerAvailable && this.renderWorker) {
+    if (controller.signal.aborted) {
+      throw new DOMException('Thumbnail rendering canceled.', 'AbortError');
+    }
+
+    if (this.workerAvailable && this.getActiveWorkers().length) {
       try {
         return await this.renderViaWorker(request, controller, workerRequestId);
       } catch (error) {
@@ -152,9 +157,11 @@ export class ThumbnailQueue {
           error instanceof PdfMasterError &&
           (error.code === ErrorCode.UnsupportedOperation || error.code === ErrorCode.WorkerFailed)
         ) {
-          this.workerAvailable = false;
+          this.disableRenderWorkers(error);
         } else if (error instanceof Error && error.message.includes('OffscreenCanvas')) {
-          this.workerAvailable = false;
+          this.disableRenderWorkers(
+            new PdfMasterError(ErrorCode.UnsupportedOperation, 'OffscreenCanvas is not available for render workers.'),
+          );
         }
       }
     }
@@ -173,12 +180,14 @@ export class ThumbnailQueue {
     controller: AbortController,
     workerRequestId: string,
   ): Promise<Blob> {
-    const worker = this.renderWorker;
-    if (!worker) {
+    const client = this.acquireWorker();
+    if (!client) {
       return Promise.reject(
-        new PdfMasterError(ErrorCode.UnsupportedOperation, 'Render worker is not available in this environment.'),
+        new PdfMasterError(ErrorCode.WorkerFailed, 'No render worker is currently available for thumbnail generation.'),
       );
     }
+
+    client.busy = true;
 
     return new Promise<Blob>((resolve, reject) => {
       const signal = controller.signal;
@@ -189,31 +198,49 @@ export class ThumbnailQueue {
 
       const handleAbort = () => {
         cleanup();
-        worker.postMessage({
-          type: 'render:cancel',
-          requestId: workerRequestId,
-        });
+        client.busy = false;
+        try {
+          client.worker.postMessage({
+            type: 'render:cancel',
+            requestId: workerRequestId,
+          });
+        } catch {
+          // Ignore worker teardown races during cancellation.
+        }
         this.workerRequests.delete(workerRequestId);
         reject(new DOMException('Thumbnail rendering canceled.', 'AbortError'));
       };
+
+      if (signal.aborted) {
+        handleAbort();
+        return;
+      }
 
       signal.addEventListener('abort', handleAbort, { once: true });
       this.workerRequests.set(workerRequestId, {
         resolve: (blob) => {
           cleanup();
+          client.busy = false;
           resolve(blob);
         },
         reject: (error) => {
           cleanup();
+          client.busy = false;
           reject(error);
         },
+        client,
       });
 
       const timeoutId = setTimeout(() => {
-        worker.postMessage({
-          type: 'render:cancel',
-          requestId: workerRequestId,
-        });
+        client.busy = false;
+        try {
+          client.worker.postMessage({
+            type: 'render:cancel',
+            requestId: workerRequestId,
+          });
+        } catch {
+          // Ignore worker teardown races during timeout cancellation.
+        }
         this.workerRequests.delete(workerRequestId);
         cleanup();
         reject(
@@ -233,11 +260,19 @@ export class ThumbnailQueue {
         pageIndex: request.pageIndex,
         maxWidth: request.maxWidth,
       };
-      worker.postMessage(message);
+
+      try {
+        client.worker.postMessage(message);
+      } catch (error) {
+        cleanup();
+        client.busy = false;
+        this.workerRequests.delete(workerRequestId);
+        reject(error);
+      }
     });
   }
 
-  private readonly handleWorkerMessage = (event: MessageEvent<RenderWorkerResponse>) => {
+  private handleWorkerMessage(client: RenderWorkerClient, event: MessageEvent<RenderWorkerResponse>): void {
     const message = event.data;
     const pending = this.workerRequests.get(message.requestId);
     if (!pending) {
@@ -245,39 +280,106 @@ export class ThumbnailQueue {
     }
 
     this.workerRequests.delete(message.requestId);
+    client.busy = false;
 
     if (message.type === 'render:success') {
       pending.resolve(message.blob);
       return;
     }
 
-    if (message.type === 'render:unsupported') {
-      pending.reject(
-        new PdfMasterError(
-          message.error.code,
-          message.error.message,
-          message.error.details,
-          message.error.recoverable,
-        ),
-      );
-      return;
-    }
-
-    pending.reject(
-      new PdfMasterError(
-        message.error.code,
-        message.error.message,
-        message.error.details,
-        message.error.recoverable,
-      ),
+    const error = new PdfMasterError(
+      message.error.code,
+      message.error.message,
+      message.error.details,
+      message.error.recoverable,
     );
-  };
 
-  private readonly handleWorkerError = (event: ErrorEvent) => {
-    this.workerAvailable = false;
+    pending.reject(error);
+
+    if (message.type === 'render:unsupported') {
+      this.disableRenderWorkers(error);
+    }
+  }
+
+  private handleWorkerError(client: RenderWorkerClient, event: ErrorEvent): void {
+    const error =
+      event.error instanceof Error
+        ? event.error
+        : new PdfMasterError(ErrorCode.WorkerFailed, event.message || 'Render worker failed unexpectedly.');
+
     for (const [requestId, pending] of this.workerRequests.entries()) {
-      pending.reject(event.error ?? new Error(event.message));
+      if (pending.client !== client) {
+        continue;
+      }
+      pending.reject(error);
       this.workerRequests.delete(requestId);
     }
-  };
+
+    client.worker.removeEventListener('message', client.handleMessage);
+    client.worker.removeEventListener('error', client.handleError);
+    client.worker.terminate();
+    client.busy = false;
+    client.terminated = true;
+    this.syncQueueConcurrency();
+  }
+
+  private createRenderWorker(id: number): RenderWorkerClient {
+    const worker = new Worker(new URL('../workers/render.worker.ts', import.meta.url), { type: 'module' });
+    const client: RenderWorkerClient = {
+      id,
+      worker,
+      busy: false,
+      terminated: false,
+      handleMessage: (event) => this.handleWorkerMessage(client, event),
+      handleError: (event) => this.handleWorkerError(client, event),
+    };
+
+    worker.addEventListener('message', client.handleMessage);
+    worker.addEventListener('error', client.handleError);
+    return client;
+  }
+
+  private acquireWorker(): RenderWorkerClient | null {
+    if (!this.workerAvailable) {
+      return null;
+    }
+
+    return this.getActiveWorkers().find((client) => !client.busy) ?? null;
+  }
+
+  private disableRenderWorkers(error: PdfMasterError): void {
+    for (const client of this.getActiveWorkers()) {
+      for (const [requestId, pending] of this.workerRequests.entries()) {
+        if (pending.client !== client) {
+          continue;
+        }
+        pending.reject(error);
+        this.workerRequests.delete(requestId);
+      }
+
+      client.worker.removeEventListener('message', client.handleMessage);
+      client.worker.removeEventListener('error', client.handleError);
+      client.worker.terminate();
+      client.busy = false;
+      client.terminated = true;
+    }
+
+    this.syncQueueConcurrency();
+  }
+
+  private syncQueueConcurrency(): void {
+    const workerCount = this.getActiveWorkers().length;
+    this.workerAvailable = workerCount > 0;
+    this.queue.setConcurrency(workerCount > 0 ? workerCount : this.fallbackConcurrency);
+  }
+
+  private broadcastToWorkers(message: RenderWorkerMessage): void {
+    for (const client of this.getActiveWorkers()) {
+      client.worker.postMessage(message);
+    }
+  }
+
+  private getActiveWorkers(): RenderWorkerClient[] {
+    return this.renderWorkers.filter((client) => !client.terminated);
+  }
 }

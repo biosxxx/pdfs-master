@@ -304,6 +304,8 @@ function ThumbnailPreview({ thumbnail, rotation }: { thumbnail?: ThumbnailState;
         <img
           src={thumbnail.url}
           alt="PDF page thumbnail"
+          decoding="async"
+          draggable={false}
           className="block max-h-full max-w-full object-contain shadow-sm"
           style={{ transform: `rotate(${rotation}deg)` }}
         />

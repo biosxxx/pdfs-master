@@ -33,7 +33,7 @@ interface ViewerDialogState {
   progress: number;
   pageNumber: number;
   title: string;
-  pdfUrl?: string;
+  pdfBlob?: Blob;
   revision?: string;
   error?: string;
   loadingMessage?: string;
@@ -72,6 +72,18 @@ export function App() {
       revokeObjectUrl(viewerUrlRef.current);
       viewerUrlRef.current = undefined;
     }
+  }, []);
+
+  const ensureViewerUrl = useCallback((blob?: Blob) => {
+    if (!blob) {
+      return undefined;
+    }
+
+    if (!viewerUrlRef.current) {
+      viewerUrlRef.current = makeObjectUrl(blob);
+    }
+
+    return viewerUrlRef.current;
   }, []);
 
   const activeDocument = store.ui.activeDocumentId
@@ -164,7 +176,7 @@ export function App() {
       ...current,
       open: false,
       loading: false,
-      pdfUrl: undefined,
+      pdfBlob: undefined,
       revision: undefined,
       error: undefined,
       progress: 0,
@@ -300,7 +312,7 @@ export function App() {
 
     const title = `${document.name} · Page ${page.sourcePageIndex + 1}`;
 
-    if (viewerDialog.pdfUrl && viewerDialog.revision === workspaceRevision) {
+    if (viewerDialog.pdfBlob && viewerDialog.revision === workspaceRevision) {
       setViewerDialog((current) => ({
         ...current,
         open: true,
@@ -351,11 +363,7 @@ export function App() {
         throw new Error('Viewer PDF was not generated.');
       }
 
-      const nextUrl = makeObjectUrl(file.blob);
-      if (viewerUrlRef.current && viewerUrlRef.current !== nextUrl) {
-        revokeObjectUrl(viewerUrlRef.current);
-      }
-      viewerUrlRef.current = nextUrl;
+      clearViewerCache();
 
       setViewerDialog((current) => ({
         ...current,
@@ -364,7 +372,7 @@ export function App() {
         progress: 100,
         pageNumber,
         title,
-        pdfUrl: nextUrl,
+        pdfBlob: file.blob,
         revision: workspaceRevision,
         error: undefined,
         loadingMessage: undefined,
@@ -381,6 +389,7 @@ export function App() {
         progress: 0,
         pageNumber,
         title,
+        pdfBlob: undefined,
         error: issue.message,
         loadingMessage: undefined,
       }));
@@ -541,6 +550,7 @@ export function App() {
                 <EmptyState
                   title="Start with the working canvas"
                   description="Import one or more PDFs to open the desktop editor layout with document structure on the left, page workspace in the center, and the inspector on demand."
+                  align="center"
                 >
                   <DropZone compact disabled={importBusy} onFiles={(files) => void handleImport(files)} />
                 </EmptyState>
@@ -623,7 +633,7 @@ export function App() {
         open={viewerDialog.open}
         title={viewerDialog.title}
         pageNumber={viewerDialog.pageNumber}
-        pdfUrl={viewerDialog.pdfUrl}
+        pdfBlob={viewerDialog.pdfBlob}
         loading={viewerDialog.loading}
         loadingMessage={viewerDialog.loadingMessage}
         progress={viewerDialog.progress}
@@ -635,17 +645,19 @@ export function App() {
         }}
         onToggleExpanded={() => setViewerDialog((current) => ({ ...current, expanded: !current.expanded }))}
         onOpenInBrowser={() => {
-          if (!viewerDialog.pdfUrl) {
+          const viewerUrl = ensureViewerUrl(viewerDialog.pdfBlob);
+          if (!viewerUrl) {
             return;
           }
-          window.open(`${viewerDialog.pdfUrl}#page=${viewerDialog.pageNumber}&zoom=page-fit`, '_blank', 'noopener,noreferrer');
+          window.open(`${viewerUrl}#page=${viewerDialog.pageNumber}&zoom=page-fit`, '_blank', 'noopener,noreferrer');
         }}
         onDownload={() => {
-          if (!viewerDialog.pdfUrl) {
+          const viewerUrl = ensureViewerUrl(viewerDialog.pdfBlob);
+          if (!viewerUrl) {
             return;
           }
           const link = document.createElement('a');
-          link.href = viewerDialog.pdfUrl;
+          link.href = viewerUrl;
           link.download = `${(store.ui.exportFileName || 'pdf-master-viewer').replace(/\.pdf$/i, '')}.pdf`;
           link.click();
         }}

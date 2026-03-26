@@ -1,10 +1,11 @@
 import clsx from 'clsx';
+import { PdfCanvasViewer } from '@/components/PdfViewerDialog/PdfCanvasViewer';
 
 interface PdfViewerDialogProps {
   open: boolean;
   title: string;
   pageNumber: number;
-  pdfUrl?: string;
+  pdfBlob?: Blob;
   loading: boolean;
   loadingMessage?: string;
   progress?: number;
@@ -20,7 +21,7 @@ export function PdfViewerDialog({
   open,
   title,
   pageNumber,
-  pdfUrl,
+  pdfBlob,
   loading,
   loadingMessage,
   progress,
@@ -35,8 +36,6 @@ export function PdfViewerDialog({
     return null;
   }
 
-  const iframeSrc = pdfUrl ? `${pdfUrl}#page=${pageNumber}&zoom=page-fit&toolbar=1&navpanes=0&statusbar=0` : undefined;
-
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/44 p-3 backdrop-blur-sm">
       <div
@@ -50,7 +49,7 @@ export function PdfViewerDialog({
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">PDF viewer</p>
             <h3 className="truncate text-base font-semibold text-slate-900">{title}</h3>
             <p className="mt-1 text-xs text-slate-500">
-              Page {pageNumber}. Search with Cmd/Ctrl+F, select and copy text directly in the embedded viewer. Browser-native annotations/comments are available via "Open in browser".
+              Page {pageNumber}. The embedded viewer is optimized for smooth canvas rendering and low memory usage. Use "Open in browser" for browser-native search, text selection, annotations, and comments.
             </p>
           </div>
 
@@ -59,7 +58,7 @@ export function PdfViewerDialog({
               type="button"
               className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
               onClick={onOpenInBrowser}
-              disabled={!pdfUrl || loading}
+              disabled={!pdfBlob || loading}
             >
               Open in browser
             </button>
@@ -67,7 +66,7 @@ export function PdfViewerDialog({
               type="button"
               className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
               onClick={onDownload}
-              disabled={!pdfUrl || loading}
+              disabled={!pdfBlob || loading}
             >
               Download
             </button>
@@ -101,18 +100,15 @@ export function PdfViewerDialog({
               <p className="mt-2 max-w-xl text-sm leading-6 text-slate-500">{loadingMessage ?? 'Collecting the current workspace order, page transforms, and form values.'}</p>
             </div>
           ) : error ? (
-            <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-              <h4 className="text-base font-semibold text-slate-900">Viewer could not be opened</h4>
-              <p className="mt-2 max-w-xl text-sm leading-6 text-slate-500">{error}</p>
-            </div>
-          ) : iframeSrc ? (
-            <iframe
-              key={`${iframeSrc}:${expanded ? 'expanded' : 'windowed'}`}
-              title={title}
-              src={iframeSrc}
-              className="h-full w-full border-0 bg-white"
-              allow="clipboard-read; clipboard-write"
-              allowFullScreen
+          <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+            <h4 className="text-base font-semibold text-slate-900">Viewer could not be opened</h4>
+            <p className="mt-2 max-w-xl text-sm leading-6 text-slate-500">{error}</p>
+          </div>
+          ) : pdfBlob ? (
+            <PdfCanvasViewer
+              key={`${title}:${pageNumber}:${expanded ? 'expanded' : 'windowed'}`}
+              blob={pdfBlob}
+              initialPageNumber={pageNumber}
             />
           ) : null}
         </div>

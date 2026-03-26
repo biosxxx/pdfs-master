@@ -19,9 +19,18 @@ export function DropZone({ disabled, compact, onFiles }: DropZoneProps) {
   };
 
   return (
-    <section className={clsx('rounded-xl border border-dashed transition', compact ? 'p-3' : 'p-4', isOver ? 'border-[color:var(--pm-accent-strong)] bg-[color:var(--pm-accent-soft)]' : 'border-slate-300 bg-white')}>
+    <section className={clsx(
+      'mx-auto w-full rounded-[24px] border border-dashed transition',
+      compact ? 'max-w-6xl p-3 md:p-4' : 'max-w-5xl p-4 md:p-5',
+      isOver ? 'border-[color:var(--pm-accent-strong)] bg-[color:var(--pm-accent-soft)]/55 shadow-[0_22px_60px_rgba(37,99,235,0.08)]' : 'border-slate-300 bg-white',
+    )}>
       <div
-        className={clsx('rounded-lg border border-dashed px-4 text-center transition', compact ? 'py-6' : 'py-8', isOver ? 'border-[color:var(--pm-accent-strong)] bg-white/70' : 'border-slate-300 bg-slate-50/70', disabled && 'cursor-not-allowed opacity-60')}
+        className={clsx(
+          'mx-auto flex flex-col items-center justify-center rounded-[20px] border border-dashed px-6 text-center transition',
+          compact ? 'min-h-[230px] py-10 md:min-h-[250px]' : 'min-h-[280px] py-14',
+          isOver ? 'border-[color:var(--pm-accent-strong)] bg-white/84' : 'border-slate-300 bg-slate-50/70',
+          disabled && 'cursor-not-allowed opacity-60',
+        )}
         onDragEnter={(event) => {
           event.preventDefault();
           if (!disabled) {
@@ -44,25 +53,27 @@ export function DropZone({ disabled, compact, onFiles }: DropZoneProps) {
           handleFiles(event.dataTransfer.files);
         }}
       >
-        <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-slate-950 text-[11px] font-semibold uppercase tracking-[0.18em] text-white">
+        <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-slate-950 text-[11px] font-semibold uppercase tracking-[0.22em] text-white shadow-[0_14px_28px_rgba(15,23,42,0.18)]">
           PDF
         </div>
-        <h3 className={clsx('font-semibold text-slate-900', compact ? 'mt-3 text-base' : 'mt-4 text-lg')}>
+        <h3 className={clsx('max-w-2xl font-semibold text-slate-900', compact ? 'mt-5 text-[1.75rem] leading-[1.15] tracking-[-0.02em]' : 'mt-5 text-[2rem] leading-[1.1] tracking-[-0.03em]')}>
           Drop PDFs here or choose files
         </h3>
-        <p className={clsx('mx-auto mt-2 max-w-xl text-slate-500', compact ? 'text-sm leading-6' : 'text-sm leading-6')}>
+        <p className={clsx('mx-auto mt-3 max-w-2xl text-slate-500', compact ? 'text-[15px] leading-7' : 'text-base leading-7')}>
           Import one or many PDFs, keep all processing local, then reorder and export directly from the workspace.
         </p>
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+        <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
           <button
             type="button"
-            className="rounded-lg bg-[color:var(--pm-accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[color:var(--pm-accent-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-xl bg-[color:var(--pm-accent)] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_14px_28px_rgba(37,99,235,0.18)] hover:bg-[color:var(--pm-accent-strong)] disabled:cursor-not-allowed disabled:opacity-50"
             onClick={() => inputRef.current?.click()}
             disabled={disabled}
           >
             Select PDF files
           </button>
-          <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">Client-side only</span>
+          <span className="rounded-full border border-slate-200 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 shadow-[0_6px_18px_rgba(15,23,42,0.05)]">
+            Client-side only
+          </span>
         </div>
         <input
           ref={inputRef}
