@@ -1,3 +1,4 @@
+import clsx from 'clsx';
 import type { DocumentEntity, FormFieldModel, FormFieldValue } from '@/domain/types';
 import { countCompletedFields } from '@/services/formService';
 import { getMetadataRows } from '@/services/metadataService';
