@@ -27,7 +27,7 @@ export function Inspector({ document, onFieldChange, onFlattenToggle }: Inspecto
     <div className="flex h-full flex-col bg-[color:var(--pm-panel)]">
       <div className="border-b border-[var(--pm-border)] px-4 py-3">
         <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Inspector</p>
-        <h2 className="mt-1 truncate text-sm font-semibold text-slate-900">{document.name}</h2>
+        <h2 className={clsx("mt-1 font-semibold text-slate-900 break-all", document.name.length > 40 ? "text-xs leading-snug" : "text-sm")}>{document.name}</h2>
         <p className="mt-1 text-xs text-slate-500">{document.pageCount} pages · {document.hasForms ? `${completedFields}/${document.formFields.length} fields filled` : 'No form fields detected'}</p>
       </div>
 
@@ -85,8 +85,8 @@ export function Inspector({ document, onFieldChange, onFlattenToggle }: Inspecto
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-start justify-between gap-4">
-      <span className="text-slate-500">{label}</span>
-      <span className="max-w-[180px] text-right font-medium text-slate-900">{value}</span>
+      <span className="shrink-0 text-slate-500">{label}</span>
+      <span className={clsx("text-right font-medium text-slate-900 break-all", value.length > 30 ? "text-xs leading-snug" : "text-sm")}>{value}</span>
     </div>
   );
 }

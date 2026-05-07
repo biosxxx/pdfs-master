@@ -131,15 +131,15 @@ function ModeCard({ title, description, active, disabled, onClick }: { title: st
     <button
       type="button"
       className={clsx(
-        'rounded-xl border p-3 text-left transition',
+        'flex min-w-0 flex-col rounded-xl border p-3 text-left transition',
         active ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-900',
         disabled && 'cursor-not-allowed opacity-50',
       )}
       onClick={onClick}
       disabled={disabled}
     >
-      <p className="font-medium">{title}</p>
-      <p className={clsx('mt-2 text-sm', active ? 'text-slate-300' : 'text-slate-500')}>{description}</p>
+      <p className="w-full font-medium break-all line-clamp-2">{title}</p>
+      <p className={clsx('mt-2 break-all', description.length > 40 ? 'text-xs leading-snug' : 'text-sm', active ? 'text-slate-300' : 'text-slate-500')}>{description}</p>
     </button>
   );
 }
