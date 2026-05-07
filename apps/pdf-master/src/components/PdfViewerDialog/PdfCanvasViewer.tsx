@@ -153,7 +153,7 @@ export function PdfCanvasViewer({ blob, initialPageNumber }: PdfCanvasViewerProp
       observer.disconnect();
       window.removeEventListener('resize', measure);
     };
-  }, []);
+  }, [documentState.status]);
 
   const pageLayout = useMemo(() => {
     if (!documentState.pageMetrics.length || containerWidth <= 0) {

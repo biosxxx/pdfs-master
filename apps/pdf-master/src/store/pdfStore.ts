@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import {
   addDocumentToWorkspace,
+  addDocumentToWorkspaceAtPosition,
   deletePagesFromWorkspace,
   emptyWorkspace,
   removeDocumentFromWorkspace,
@@ -11,6 +12,7 @@ import {
   updateDocumentFormValue,
 } from '@/domain/commands';
 import type {
+  DropTargetPosition,
   ExportMode,
   FormFieldValue,
   JobKind,
@@ -27,6 +29,7 @@ import { revokeObjectUrl } from '@/utils/objectUrl';
 
 interface PdfStoreActions {
   importDocuments: (documents: ImportedDocument[]) => void;
+  importDocumentsAtPosition: (documents: ImportedDocument[], targetPageId: string, position: DropTargetPosition) => void;
   clearWorkspace: () => void;
   removeDocument: (documentId: string) => void;
   reorderDocuments: (draggedDocumentId: string, targetDocumentId: string, position: 'before' | 'after') => void;
@@ -112,6 +115,39 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
             documents.length === 1
               ? documents[0].sourceFile.name.replace(/\.pdf$/i, '')
               : state.ui.exportFileName,
+        },
+      };
+    });
+  },
+
+  importDocumentsAtPosition: (documents, targetPageId, position) => {
+    set((state) => {
+      let workspace = {
+        documents: state.documents,
+        pages: state.pages,
+        documentOrder: state.documentOrder,
+        pageOrder: state.pageOrder,
+        pageOrderByDocument: state.pageOrderByDocument,
+      };
+
+      for (const entry of documents) {
+        workspace = addDocumentToWorkspaceAtPosition(
+          workspace,
+          entry.sourceFile,
+          entry.payload,
+          entry.sourceUrl,
+          targetPageId,
+          position,
+        );
+      }
+
+      const nextActiveDocument = state.ui.activeDocumentId ?? documents[0]?.payload.id;
+      return {
+        ...state,
+        ...workspace,
+        ui: {
+          ...state.ui,
+          activeDocumentId: nextActiveDocument,
         },
       };
     });

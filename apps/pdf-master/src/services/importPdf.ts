@@ -1,9 +1,10 @@
-import { validatePdfFile } from '@/domain/validation';
+import { validatePdfFile, validateImportFile, isImageFile } from '@/domain/validation';
 import { toErrorModel } from '@/domain/errors';
 import type { ErrorModel, IngestDocumentPayload, SourceFileModel } from '@/domain/types';
 import type { IngestWorkerResponse } from '@/workers/protocols';
 import { createId } from '@/utils/ids';
 import { makeObjectUrl } from '@/utils/objectUrl';
+import { convertImageToPdf } from '@/services/importImage';
 
 export interface ImportedDocument {
   sourceFile: SourceFileModel;
@@ -14,6 +15,51 @@ export interface ImportedDocument {
 export interface ImportResult {
   imported: ImportedDocument[];
   errors: Array<{ fileName: string; error: ErrorModel }>;
+}
+
+/**
+ * Unified import function that accepts both PDF and image files.
+ * Images are first converted to single-page PDFs, then all PDFs are ingested.
+ */
+export async function importFiles(
+  files: File[],
+  onProgress?: (completed: number, total: number) => void,
+): Promise<ImportResult> {
+  const errors: Array<{ fileName: string; error: ErrorModel }> = [];
+  const pdfFiles: File[] = [];
+  let completed = 0;
+
+  // Phase 1: Validate and convert images to PDFs
+  for (const file of files) {
+    try {
+      validateImportFile(file);
+
+      if (isImageFile(file)) {
+        const result = await convertImageToPdf(file);
+        pdfFiles.push(result.pdfFile);
+      } else {
+        pdfFiles.push(file);
+      }
+    } catch (error) {
+      errors.push({ fileName: file.name, error: toErrorModel(error) });
+      completed += 1;
+      onProgress?.(completed, files.length);
+    }
+  }
+
+  // Phase 2: Import all PDF files (original PDFs + converted images)
+  if (!pdfFiles.length) {
+    return { imported: [], errors };
+  }
+
+  const pdfResult = await importPdfFiles(pdfFiles, (pdfCompleted, _pdfTotal) => {
+    onProgress?.(completed + pdfCompleted, files.length);
+  });
+
+  return {
+    imported: pdfResult.imported,
+    errors: [...errors, ...pdfResult.errors],
+  };
 }
 
 export async function importPdfFiles(
@@ -97,3 +143,4 @@ function inspectWithWorker(
     });
   });
 }
+

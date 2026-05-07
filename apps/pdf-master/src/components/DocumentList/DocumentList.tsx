@@ -12,6 +12,12 @@ interface DocumentListProps {
   onSplit: (documentId: string) => void;
   onRemove: (documentId: string) => void;
   onReorder: (draggedDocumentId: string, targetDocumentId: string, position: DropTargetPosition) => void;
+  onExternalFileDrop?: (files: File[]) => void;
+}
+
+/** Returns true when the drag event carries external files from the OS. */
+function isExternalFileDrag(event: React.DragEvent): boolean {
+  return event.dataTransfer.types.includes('Files') && !event.dataTransfer.types.includes('text/plain');
 }
 
 export function DocumentList({
@@ -24,11 +30,37 @@ export function DocumentList({
   onSplit,
   onRemove,
   onReorder,
+  onExternalFileDrop,
 }: DocumentListProps) {
   const [draggedDocumentId, setDraggedDocumentId] = useState<string | null>(null);
+  const [externalDragOver, setExternalDragOver] = useState(false);
 
   return (
-    <section className="flex h-full flex-col bg-[color:var(--pm-panel)]">
+    <section
+      className={clsx(
+        'flex h-full flex-col bg-[color:var(--pm-panel)] transition',
+        externalDragOver && 'ring-2 ring-inset ring-[color:var(--pm-accent)]/30',
+      )}
+      onDragOver={(event) => {
+        if (isExternalFileDrag(event)) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'copy';
+          setExternalDragOver(true);
+        }
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+          setExternalDragOver(false);
+        }
+      }}
+      onDrop={(event) => {
+        if (isExternalFileDrag(event) && event.dataTransfer.files.length) {
+          event.preventDefault();
+          setExternalDragOver(false);
+          onExternalFileDrop?.(Array.from(event.dataTransfer.files));
+        }
+      }}
+    >
       <div className={clsx('flex items-center border-b border-[var(--pm-border)]', collapsed ? 'justify-center px-2 py-3' : 'justify-between px-4 py-3')}>
         {collapsed ? (
           <button
@@ -75,15 +107,30 @@ export function DocumentList({
                 )}
                 onDragStart={(event) => {
                   event.dataTransfer.effectAllowed = 'move';
+                  event.dataTransfer.setData('text/plain', 'internal-document-drag');
                   setDraggedDocumentId(document.id);
                 }}
                 onDragEnd={() => setDraggedDocumentId(null)}
                 onDragOver={(event) => {
                   event.preventDefault();
-                  event.dataTransfer.dropEffect = 'move';
+                  if (isExternalFileDrag(event)) {
+                    event.dataTransfer.dropEffect = 'copy';
+                  } else {
+                    event.dataTransfer.dropEffect = 'move';
+                  }
                 }}
                 onDrop={(event) => {
                   event.preventDefault();
+                  event.stopPropagation();
+
+                  // External file drop on a specific document
+                  if (isExternalFileDrag(event) && event.dataTransfer.files.length) {
+                    setExternalDragOver(false);
+                    onExternalFileDrop?.(Array.from(event.dataTransfer.files));
+                    return;
+                  }
+
+                  // Internal document reorder
                   if (!draggedDocumentId || draggedDocumentId === document.id) {
                     return;
                   }
@@ -143,8 +190,16 @@ export function DocumentList({
             );
           })
         ) : (
-          <div className={clsx('rounded-xl border border-dashed border-slate-300 text-slate-500', collapsed ? 'px-2 py-4 text-center text-[10px]' : 'px-3 py-4 text-sm')}>
-            {collapsed ? 'No docs' : 'Imported PDF files appear here.'}
+          <div className={clsx(
+            'rounded-xl border border-dashed text-slate-500 transition',
+            externalDragOver
+              ? 'border-[color:var(--pm-accent-strong)] bg-[color:var(--pm-accent-soft)]/50'
+              : 'border-slate-300',
+            collapsed ? 'px-2 py-4 text-center text-[10px]' : 'px-3 py-4 text-sm',
+          )}>
+            {collapsed
+              ? externalDragOver ? '+ Drop' : 'No docs'
+              : externalDragOver ? 'Drop files here to import' : 'Import PDFs or images — drag files here.'}
           </div>
         )}
       </div>

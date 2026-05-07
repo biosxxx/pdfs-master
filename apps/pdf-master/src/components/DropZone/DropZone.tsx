@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import clsx from 'clsx';
+import { ACCEPT_IMPORT_TYPES } from '@/services/importImage';
 
 interface DropZoneProps {
   disabled?: boolean;
@@ -57,10 +58,10 @@ export function DropZone({ disabled, compact, onFiles }: DropZoneProps) {
           PDF
         </div>
         <h3 className={clsx('max-w-2xl font-semibold text-slate-900', compact ? 'mt-5 text-[1.75rem] leading-[1.15] tracking-[-0.02em]' : 'mt-5 text-[2rem] leading-[1.1] tracking-[-0.03em]')}>
-          Drop PDFs here or choose files
+          Drop PDFs or images here
         </h3>
         <p className={clsx('mx-auto mt-3 max-w-2xl text-slate-500', compact ? 'text-[15px] leading-7' : 'text-base leading-7')}>
-          Import one or many PDFs, keep all processing local, then reorder and export directly from the workspace.
+          Import PDFs and images (JPEG, PNG, WebP), keep all processing local, then reorder and export directly from the workspace.
         </p>
         <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
           <button
@@ -69,7 +70,7 @@ export function DropZone({ disabled, compact, onFiles }: DropZoneProps) {
             onClick={() => inputRef.current?.click()}
             disabled={disabled}
           >
-            Select PDF files
+            Select files
           </button>
           <span className="rounded-full border border-slate-200 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 shadow-[0_6px_18px_rgba(15,23,42,0.05)]">
             Client-side only
@@ -78,7 +79,7 @@ export function DropZone({ disabled, compact, onFiles }: DropZoneProps) {
         <input
           ref={inputRef}
           type="file"
-          accept="application/pdf"
+          accept={ACCEPT_IMPORT_TYPES}
           multiple
           className="sr-only"
           onChange={(event) => {

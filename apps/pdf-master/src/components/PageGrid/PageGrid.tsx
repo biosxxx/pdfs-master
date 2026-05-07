@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import clsx from 'clsx';
 import type { DocumentEntity, DropTargetPosition, PageEntity, ThumbnailDensity, ThumbnailState, ViewMode } from '@/domain/types';
@@ -19,6 +19,7 @@ interface PageGridProps {
   onRotatePage: (pageId: string) => void;
   onDeletePage: (pageId: string) => void;
   onReorder: (draggedPageId: string, targetPageId: string, position: DropTargetPosition) => void;
+  onExternalFileDrop?: (files: File[], targetPageId: string, position: DropTargetPosition) => void;
 }
 
 const gridDensityClasses: Record<ThumbnailDensity, string> = {
@@ -32,6 +33,12 @@ const previewFrameClasses: Record<ThumbnailDensity, string> = {
   medium: 'h-[230px]',
   large: 'h-[300px]',
 };
+
+/** Returns true when the drag event carries external files from the OS. */
+function isExternalFileDrag(event: React.DragEvent): boolean {
+  // External files have 'Files' in types but no custom internal drag data
+  return event.dataTransfer.types.includes('Files') && !event.dataTransfer.types.includes('text/plain');
+}
 
 export function PageGrid({
   groups,
@@ -49,9 +56,19 @@ export function PageGrid({
   onRotatePage,
   onDeletePage,
   onReorder,
+  onExternalFileDrop,
 }: PageGridProps) {
   const selected = new Set(selectedPageIds);
   const [draggedPageId, setDraggedPageId] = useState<string | null>(null);
+  const [externalDropTarget, setExternalDropTarget] = useState<{ pageId: string; position: DropTargetPosition } | null>(null);
+
+  const handleInternalDragStart = useCallback((pageId: string) => {
+    setDraggedPageId(pageId);
+  }, []);
+
+  const handleInternalDragEnd = useCallback(() => {
+    setDraggedPageId(null);
+  }, []);
 
   return (
     <div className="flex h-full flex-col bg-[color:var(--pm-panel)]">
@@ -105,18 +122,29 @@ export function PageGrid({
                     thumbnail={thumbnails[page.id]}
                     viewMode={viewMode}
                     thumbnailDensity={thumbnailDensity}
+                    externalDropPosition={externalDropTarget?.pageId === page.id ? externalDropTarget.position : null}
                     onVisible={() => onRequestThumbnail(page, document)}
                     onClick={onPageClick}
                     onToggleSelection={onTogglePageSelection}
                     onOpenViewer={onOpenViewer}
                     onRotatePage={onRotatePage}
                     onDeletePage={onDeletePage}
-                    onDragStart={() => setDraggedPageId(page.id)}
-                    onDragEnd={() => setDraggedPageId(null)}
+                    onDragStart={() => handleInternalDragStart(page.id)}
+                    onDragEnd={handleInternalDragEnd}
                     onDrop={(position) => {
                       if (draggedPageId && draggedPageId !== page.id) {
                         onReorder(draggedPageId, page.id, position);
                       }
+                    }}
+                    onExternalDragOver={(position) => setExternalDropTarget({ pageId: page.id, position })}
+                    onExternalDragLeave={() => {
+                      setExternalDropTarget((current) =>
+                        current?.pageId === page.id ? null : current,
+                      );
+                    }}
+                    onExternalFileDrop={(files, position) => {
+                      setExternalDropTarget(null);
+                      onExternalFileDrop?.(files, page.id, position);
                     }}
                   />
                 ))}
@@ -136,6 +164,7 @@ function PageCard({
   thumbnail,
   viewMode,
   thumbnailDensity,
+  externalDropPosition,
   onVisible,
   onClick,
   onToggleSelection,
@@ -145,6 +174,9 @@ function PageCard({
   onDragStart,
   onDragEnd,
   onDrop,
+  onExternalDragOver,
+  onExternalDragLeave,
+  onExternalFileDrop,
 }: {
   page: PageEntity;
   document: DocumentEntity;
@@ -152,6 +184,7 @@ function PageCard({
   thumbnail?: ThumbnailState;
   viewMode: ViewMode;
   thumbnailDensity: ThumbnailDensity;
+  externalDropPosition: DropTargetPosition | null;
   onVisible: () => void;
   onClick: (pageId: string, gesture?: { additive?: boolean; range?: boolean }) => void;
   onToggleSelection: (pageId: string, gesture?: { range?: boolean }) => void;
@@ -161,6 +194,9 @@ function PageCard({
   onDragStart: () => void;
   onDragEnd: () => void;
   onDrop: (position: DropTargetPosition) => void;
+  onExternalDragOver: (position: DropTargetPosition) => void;
+  onExternalDragLeave: () => void;
+  onExternalFileDrop: (files: File[], position: DropTargetPosition) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const isList = viewMode === 'list';
@@ -185,114 +221,161 @@ function PageCard({
     return () => observer.disconnect();
   }, [thumbnail?.status, onVisible]);
 
+  const computeDropPosition = (event: React.DragEvent): DropTargetPosition => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const horizontal = bounds.width > bounds.height * 1.1;
+    const isAfter = horizontal
+      ? event.clientX > bounds.left + bounds.width / 2
+      : event.clientY > bounds.top + bounds.height / 2;
+    return isAfter ? 'after' : 'before';
+  };
+
   return (
-    <div
-      ref={containerRef}
-      draggable
-      className={clsx(
-        'group rounded-xl border bg-white transition',
-        isList ? 'flex items-center gap-3 p-2.5' : 'p-2.5',
-        selected
-          ? 'border-[color:var(--pm-accent-strong)] shadow-[0_0_0_1px_rgba(37,99,235,0.12)]'
-          : 'border-slate-200 hover:border-slate-300',
-      )}
-      onDragStart={(event) => {
-        event.dataTransfer.effectAllowed = 'move';
-        onDragStart();
-      }}
-      onDragEnd={onDragEnd}
-      onDragOver={(event) => {
-        event.preventDefault();
-        event.dataTransfer.dropEffect = 'move';
-      }}
-      onDrop={(event) => {
-        event.preventDefault();
-        const bounds = event.currentTarget.getBoundingClientRect();
-        const horizontal = bounds.width > bounds.height * 1.1;
-        const isAfter = horizontal
-          ? event.clientX > bounds.left + bounds.width / 2
-          : event.clientY > bounds.top + bounds.height / 2;
-        onDrop(isAfter ? 'after' : 'before');
-      }}
-    >
-      <div className={clsx('min-w-0 flex-1', isList && 'flex items-center gap-3')}>
-        <div
-          role="button"
-          tabIndex={0}
-          className={clsx(
-            'group/preview relative flex w-full items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50',
-            isList ? 'h-28 w-[86px] shrink-0' : previewFrameClasses[thumbnailDensity],
-          )}
-          onClick={(event) => {
-            if (event.metaKey || event.ctrlKey || event.shiftKey) {
+    <div className="relative">
+      {/* External file drop indicator — before */}
+      {externalDropPosition === 'before' ? (
+        <div className={clsx(
+          'pointer-events-none absolute z-10',
+          isList
+            ? 'inset-x-0 -top-2 h-1 rounded-full bg-[color:var(--pm-accent)] shadow-[0_0_8px_rgba(37,99,235,0.4)]'
+            : '-left-2 inset-y-0 w-1 rounded-full bg-[color:var(--pm-accent)] shadow-[0_0_8px_rgba(37,99,235,0.4)]',
+        )} />
+      ) : null}
+
+      <div
+        ref={containerRef}
+        draggable
+        className={clsx(
+          'group rounded-xl border bg-white transition',
+          isList ? 'flex items-center gap-3 p-2.5' : 'p-2.5',
+          selected
+            ? 'border-[color:var(--pm-accent-strong)] shadow-[0_0_0_1px_rgba(37,99,235,0.12)]'
+            : 'border-slate-200 hover:border-slate-300',
+          externalDropPosition && 'ring-2 ring-[color:var(--pm-accent)]/25',
+        )}
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', 'internal-page-drag');
+          onDragStart();
+        }}
+        onDragEnd={onDragEnd}
+        onDragOver={(event) => {
+          event.preventDefault();
+          if (isExternalFileDrag(event)) {
+            event.dataTransfer.dropEffect = 'copy';
+            const position = computeDropPosition(event);
+            onExternalDragOver(position);
+          } else {
+            event.dataTransfer.dropEffect = 'move';
+          }
+        }}
+        onDragLeave={(event) => {
+          // Only fire when leaving the card entirely, not when entering a child
+          if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+            onExternalDragLeave();
+          }
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          const position = computeDropPosition(event);
+
+          if (isExternalFileDrag(event) && event.dataTransfer.files.length) {
+            onExternalFileDrop(Array.from(event.dataTransfer.files), position);
+            return;
+          }
+
+          onDrop(position);
+        }}
+      >
+        <div className={clsx('min-w-0 flex-1', isList && 'flex items-center gap-3')}>
+          <div
+            role="button"
+            tabIndex={0}
+            className={clsx(
+              'group/preview relative flex w-full items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50',
+              isList ? 'h-28 w-[86px] shrink-0' : previewFrameClasses[thumbnailDensity],
+            )}
+            onClick={(event) => {
+              if (event.metaKey || event.ctrlKey || event.shiftKey) {
+                onClick(page.id, {
+                  additive: event.metaKey || event.ctrlKey,
+                  range: event.shiftKey,
+                });
+                return;
+              }
+              onOpenViewer(page.id);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onOpenViewer(page.id);
+              }
+            }}
+          >
+            <ThumbnailPreview thumbnail={thumbnail} rotation={page.rotation} />
+            <span className="absolute left-1.5 top-1.5 rounded-md bg-slate-950/85 px-1.5 py-0.5 text-[10px] font-medium text-white">
+              {page.sourcePageIndex + 1}
+            </span>
+            <button
+              type="button"
+              aria-label={selected ? 'Remove page from selection' : 'Select page'}
+              title={selected ? 'Remove page from selection' : 'Select page'}
+              className={clsx(
+                'absolute right-1.5 top-1.5 inline-flex h-7 w-7 items-center justify-center rounded-full border shadow-sm transition',
+                selected
+                  ? 'border-[color:var(--pm-accent-strong)] bg-[color:var(--pm-accent)] text-white'
+                  : 'border-slate-300 bg-white/95 text-slate-600 hover:border-[color:var(--pm-accent-strong)] hover:text-[color:var(--pm-accent-strong)]',
+              )}
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleSelection(page.id, { range: event.shiftKey });
+              }}
+            >
+              <SelectionIcon selected={selected} />
+            </button>
+            <span className="pointer-events-none absolute inset-x-2 bottom-2 rounded-md bg-slate-950/75 px-2 py-1 text-center text-[10px] font-medium uppercase tracking-[0.14em] text-white opacity-0 transition group-hover/preview:opacity-100">
+              Open viewer
+            </span>
+          </div>
+
+          <button
+            type="button"
+            className={clsx('min-w-0 w-full text-left', isList ? 'flex-1 pl-0' : 'pt-2.5')}
+            onClick={(event) =>
               onClick(page.id, {
                 additive: event.metaKey || event.ctrlKey,
                 range: event.shiftKey,
-              });
-              return;
+              })
             }
-            onOpenViewer(page.id);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              onOpenViewer(page.id);
-            }
-          }}
-        >
-          <ThumbnailPreview thumbnail={thumbnail} rotation={page.rotation} />
-          <span className="absolute left-1.5 top-1.5 rounded-md bg-slate-950/85 px-1.5 py-0.5 text-[10px] font-medium text-white">
-            {page.sourcePageIndex + 1}
-          </span>
-          <button
-            type="button"
-            aria-label={selected ? 'Remove page from selection' : 'Select page'}
-            title={selected ? 'Remove page from selection' : 'Select page'}
-            className={clsx(
-              'absolute right-1.5 top-1.5 inline-flex h-7 w-7 items-center justify-center rounded-full border shadow-sm transition',
-              selected
-                ? 'border-[color:var(--pm-accent-strong)] bg-[color:var(--pm-accent)] text-white'
-                : 'border-slate-300 bg-white/95 text-slate-600 hover:border-[color:var(--pm-accent-strong)] hover:text-[color:var(--pm-accent-strong)]',
-            )}
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggleSelection(page.id, { range: event.shiftKey });
-            }}
           >
-            <SelectionIcon selected={selected} />
+            <p className="truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{document.name}</p>
+            <p className="mt-1 truncate text-sm font-semibold text-slate-900">{page.label}</p>
+            <p className="mt-1 text-xs text-slate-500">Original page {page.sourcePageIndex + 1} · Rotation {page.rotation}°</p>
           </button>
-          <span className="pointer-events-none absolute inset-x-2 bottom-2 rounded-md bg-slate-950/75 px-2 py-1 text-center text-[10px] font-medium uppercase tracking-[0.14em] text-white opacity-0 transition group-hover/preview:opacity-100">
-            Open viewer
-          </span>
         </div>
 
-        <button
-          type="button"
-          className={clsx('min-w-0 w-full text-left', isList ? 'flex-1 pl-0' : 'pt-2.5')}
-          onClick={(event) =>
-            onClick(page.id, {
-              additive: event.metaKey || event.ctrlKey,
-              range: event.shiftKey,
-            })
-          }
-        >
-          <p className="truncate text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{document.name}</p>
-          <p className="mt-1 truncate text-sm font-semibold text-slate-900">{page.label}</p>
-          <p className="mt-1 text-xs text-slate-500">Original page {page.sourcePageIndex + 1} · Rotation {page.rotation}°</p>
-        </button>
+        <div className={clsx(
+          'flex gap-1.5',
+          isList ? 'self-start' : 'mt-2 justify-end',
+        )}>
+          <PageActionButton label="Rotate page" onClick={() => onRotatePage(page.id)}>
+            <RotateIcon />
+          </PageActionButton>
+          <PageActionButton label="Delete page" tone="danger" onClick={() => onDeletePage(page.id)}>
+            <DeleteIcon />
+          </PageActionButton>
+        </div>
       </div>
 
-      <div className={clsx(
-        'flex gap-1.5',
-        isList ? 'self-start' : 'mt-2 justify-end',
-      )}>
-        <PageActionButton label="Rotate page" onClick={() => onRotatePage(page.id)}>
-          <RotateIcon />
-        </PageActionButton>
-        <PageActionButton label="Delete page" tone="danger" onClick={() => onDeletePage(page.id)}>
-          <DeleteIcon />
-        </PageActionButton>
-      </div>
+      {/* External file drop indicator — after */}
+      {externalDropPosition === 'after' ? (
+        <div className={clsx(
+          'pointer-events-none absolute z-10',
+          isList
+            ? 'inset-x-0 -bottom-2 h-1 rounded-full bg-[color:var(--pm-accent)] shadow-[0_0_8px_rgba(37,99,235,0.4)]'
+            : '-right-2 inset-y-0 w-1 rounded-full bg-[color:var(--pm-accent)] shadow-[0_0_8px_rgba(37,99,235,0.4)]',
+        )} />
+      ) : null}
     </div>
   );
 }

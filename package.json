@@ -1,12 +1,16 @@
 {
   "name": "pdf-master-workspace",
   "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
-    "dev": "npm --prefix apps/pdf-master run dev",
-    "build": "npm --prefix apps/pdf-master run build",
-    "preview": "npm --prefix apps/pdf-master run preview",
-    "test": "npm --prefix apps/pdf-master run test:run",
-    "test:watch": "npm --prefix apps/pdf-master run test",
-    "lint": "npm --prefix apps/pdf-master run lint"
+    "dev": "pnpm --dir apps/pdf-master run dev",
+    "build": "pnpm --dir apps/pdf-master run build",
+    "preview": "pnpm --dir apps/pdf-master run preview",
+    "test": "pnpm --dir apps/pdf-master run test:run",
+    "test:watch": "pnpm --dir apps/pdf-master run test",
+    "lint": "pnpm --dir apps/pdf-master run lint"
   }
 }

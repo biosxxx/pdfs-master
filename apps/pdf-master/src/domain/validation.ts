@@ -1,7 +1,40 @@
 import { ErrorCode, PdfMasterError } from '@/domain/errors';
+import { SUPPORTED_IMAGE_TYPES } from '@/services/importImage';
 
 const MAX_FILE_SIZE_BYTES = 128 * 1024 * 1024;
 const pdfFilePattern = /\.pdf$/i;
+const imageFilePattern = /\.(jpe?g|png|webp|bmp|gif|tiff?|svg)$/i;
+
+/** Check whether a file is a supported image format. */
+export function isImageFile(file: File): boolean {
+  return SUPPORTED_IMAGE_TYPES.has(file.type.toLowerCase()) || imageFilePattern.test(file.name);
+}
+
+/** Check whether a file is a PDF. */
+export function isPdfFile(file: File): boolean {
+  return file.type === 'application/pdf' || file.type === '' || pdfFilePattern.test(file.name);
+}
+
+/**
+ * Validate a file for import — accepts both PDF and supported image formats.
+ */
+export function validateImportFile(file: File): void {
+  const isValid = isPdfFile(file) || isImageFile(file);
+
+  if (!isValid) {
+    throw new PdfMasterError(
+      ErrorCode.InvalidFileType,
+      `${file.name} is not a supported file. Import PDF or image files (JPEG, PNG, WebP, BMP, GIF, TIFF, SVG).`,
+    );
+  }
+
+  if (file.size > MAX_FILE_SIZE_BYTES) {
+    throw new PdfMasterError(
+      ErrorCode.FileTooLarge,
+      `${file.name} exceeds the ${Math.round(MAX_FILE_SIZE_BYTES / 1024 / 1024)} MB local processing limit.`,
+    );
+  }
+}
 
 export function validatePdfFile(file: File): void {
   const isPdfMime = file.type === 'application/pdf' || file.type === '';

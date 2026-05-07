@@ -83,6 +83,74 @@ export function addDocumentToWorkspace(
   };
 }
 
+/**
+ * Like addDocumentToWorkspace, but inserts the new document's pages
+ * at a specific position relative to an existing page.
+ */
+export function addDocumentToWorkspaceAtPosition(
+  snapshot: WorkspaceSnapshot,
+  sourceFile: SourceFileModel,
+  payload: IngestDocumentPayload,
+  sourceUrl: string,
+  targetPageId: string,
+  position: DropTargetPosition,
+): WorkspaceSnapshot {
+  const pages: Record<string, PageEntity> = { ...snapshot.pages };
+  const pageIds: string[] = [];
+
+  for (const page of payload.pages) {
+    const pageEntity: PageEntity = {
+      id: page.id,
+      documentId: payload.id,
+      sourcePageIndex: page.sourcePageIndex,
+      width: page.width,
+      height: page.height,
+      rotation: 0,
+      label: page.label,
+    };
+    pages[page.id] = pageEntity;
+    pageIds.push(page.id);
+  }
+
+  const document: DocumentEntity = {
+    id: payload.id,
+    sourceFileId: sourceFile.id,
+    name: payload.name,
+    sourceFile,
+    pageCount: payload.pageCount,
+    pageIds,
+    metadata: payload.metadata,
+    hasForms: payload.hasForms,
+    formFields: payload.formFields,
+    flattenForms: false,
+    sourceUrl,
+    status: 'success',
+    errors: [],
+  };
+
+  const documents = { ...snapshot.documents, [document.id]: document };
+  const documentOrder = [...snapshot.documentOrder, document.id];
+
+  // Insert new pages at the target position
+  const targetIndex = snapshot.pageOrder.indexOf(targetPageId);
+  const insertAt = targetIndex === -1
+    ? snapshot.pageOrder.length
+    : position === 'after'
+      ? targetIndex + 1
+      : targetIndex;
+
+  const pageOrder = [...snapshot.pageOrder];
+  pageOrder.splice(insertAt, 0, ...pageIds);
+
+  return {
+    documents,
+    pages,
+    documentOrder,
+    pageOrder,
+    pageOrderByDocument: buildPageOrderByDocument(pageOrder, pages),
+  };
+}
+
 export function removeDocumentFromWorkspace(snapshot: WorkspaceSnapshot, documentId: string): WorkspaceSnapshot {
   const documents = { ...snapshot.documents };
   const pages = { ...snapshot.pages };

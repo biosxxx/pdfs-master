@@ -5,6 +5,7 @@ import { PdfjsReader } from '@/adapters/reader/pdfjsReader';
 import { ConfirmDialog } from '@/components/ConfirmDialog/ConfirmDialog';
 import { DocumentList } from '@/components/DocumentList/DocumentList';
 import { DropZone } from '@/components/DropZone/DropZone';
+import { WorkspaceDropOverlay } from '@/components/WorkspaceDropOverlay/WorkspaceDropOverlay';
 import { EmptyState } from '@/components/EmptyState/EmptyState';
 import { ExportDialog } from '@/components/ExportDialog/ExportDialog';
 import { Inspector } from '@/components/Inspector/Inspector';
@@ -14,9 +15,10 @@ import { PdfViewerDialog } from '@/components/PdfViewerDialog/PdfViewerDialog';
 import { StatusBar } from '@/components/StatusBar/StatusBar';
 import { Toolbar } from '@/components/Toolbar/Toolbar';
 import { toErrorModel } from '@/domain/errors';
-import type { DocumentEntity, ExportMode, PageEntity, ThumbnailDensity } from '@/domain/types';
+import type { DocumentEntity, DropTargetPosition, ExportMode, PageEntity, ThumbnailDensity } from '@/domain/types';
 import { downloadExportFiles, resolveSplitMode, runExport } from '@/services/exportPdf';
-import { importPdfFiles } from '@/services/importPdf';
+import { importFiles } from '@/services/importPdf';
+import { ACCEPT_IMPORT_TYPES } from '@/services/importImage';
 import { ThumbnailQueue } from '@/services/thumbnailQueue';
 import { usePdfStore } from '@/store/pdfStore';
 import { makeObjectUrl, revokeObjectUrl } from '@/utils/objectUrl';
@@ -181,8 +183,8 @@ export function App() {
       error: undefined,
       progress: 0,
     }));
-    store.setJob('ingest', { status: 'running', progress: 0, message: 'Importing PDF files...' });
-    const result = await importPdfFiles(files, (completed, total) => {
+    store.setJob('ingest', { status: 'running', progress: 0, message: 'Importing files...' });
+    const result = await importFiles(files, (completed, total) => {
       usePdfStore.getState().setJob('ingest', {
         status: 'running',
         progress: Math.round((completed / total) * 100),
@@ -195,7 +197,45 @@ export function App() {
       usePdfStore.getState().pushNotification({
         tone: 'success',
         title: 'Import complete',
-        description: `${result.imported.length} PDF file(s) added to the workspace.`,
+        description: `${result.imported.length} file(s) added to the workspace.`,
+      });
+    }
+
+    for (const issue of result.errors) {
+      usePdfStore.getState().pushNotification({
+        tone: 'error',
+        title: `Could not import ${issue.fileName}`,
+        description: issue.error.message,
+      });
+    }
+
+    usePdfStore.getState().setJob('ingest', {
+      status: result.imported.length ? 'success' : 'error',
+      progress: 100,
+      message: result.imported.length ? 'Import finished.' : 'Import failed.',
+    });
+  };
+
+  const handleImportAtPosition = async (files: File[], targetPageId: string, position: DropTargetPosition) => {
+    if (!files.length) {
+      return;
+    }
+
+    store.setJob('ingest', { status: 'running', progress: 0, message: 'Importing files at position...' });
+    const result = await importFiles(files, (completed, total) => {
+      usePdfStore.getState().setJob('ingest', {
+        status: 'running',
+        progress: Math.round((completed / total) * 100),
+        message: `Imported ${completed} of ${total} files...`,
+      });
+    });
+
+    if (result.imported.length) {
+      usePdfStore.getState().importDocumentsAtPosition(result.imported, targetPageId, position);
+      usePdfStore.getState().pushNotification({
+        tone: 'success',
+        title: 'Import complete',
+        description: `${result.imported.length} file(s) inserted into the workspace.`,
       });
     }
 
@@ -416,7 +456,7 @@ export function App() {
       <input
         ref={importInputRef}
         type="file"
-        accept="application/pdf"
+        accept={ACCEPT_IMPORT_TYPES}
         multiple
         className="sr-only"
         onChange={(event) => {
@@ -425,6 +465,7 @@ export function App() {
         }}
       />
 
+      <WorkspaceDropOverlay disabled={importBusy} onFiles={(files) => void handleImport(files)}>
       <motion.main
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
@@ -499,6 +540,7 @@ export function App() {
                 store.removeDocument(documentId);
               }}
               onReorder={store.reorderDocuments}
+              onExternalFileDrop={(files) => void handleImport(files)}
             />
           </aside>
 
@@ -536,6 +578,9 @@ export function App() {
                     );
                   }}
                   onReorder={store.reorderPages}
+                  onExternalFileDrop={(files, targetPageId, position) =>
+                    void handleImportAtPosition(files, targetPageId, position)
+                  }
                 />
               ) : (
                 <div className="p-4">
@@ -577,6 +622,7 @@ export function App() {
           jobs={store.jobs}
         />
       </motion.main>
+      </WorkspaceDropOverlay>
 
       {documentsSheetOpen ? (
         <div className="fixed inset-0 z-40 bg-slate-950/28 backdrop-blur-[1px] xl:hidden" onClick={() => setDocumentsSheetOpen(false)}>
@@ -600,6 +646,7 @@ export function App() {
                 store.removeDocument(documentId);
               }}
               onReorder={store.reorderDocuments}
+              onExternalFileDrop={(files) => void handleImport(files)}
             />
           </div>
         </div>
