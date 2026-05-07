@@ -15,9 +15,16 @@ import { PdfViewerDialog } from '@/components/PdfViewerDialog/PdfViewerDialog';
 import { StatusBar } from '@/components/StatusBar/StatusBar';
 import { Toolbar } from '@/components/Toolbar/Toolbar';
 import { toErrorModel } from '@/domain/errors';
-import type { DocumentEntity, DropTargetPosition, ExportMode, PageEntity, ThumbnailDensity } from '@/domain/types';
+import type {
+  DocumentEntity,
+  DropTargetPosition,
+  ExportMode,
+  ImageImportSettings,
+  PageEntity,
+  ThumbnailDensity,
+} from '@/domain/types';
 import { downloadExportFiles, resolveSplitMode, runExport } from '@/services/exportPdf';
-import { importFiles } from '@/services/importPdf';
+import { importFiles, reconvertImageDocument } from '@/services/importPdf';
 import { ACCEPT_IMPORT_TYPES } from '@/services/importImage';
 import { ThumbnailQueue } from '@/services/thumbnailQueue';
 import { usePdfStore } from '@/store/pdfStore';
@@ -57,6 +64,7 @@ export function App() {
   const [documentsPaneCollapsed, setDocumentsPaneCollapsed] = useState(false);
   const [documentsSheetOpen, setDocumentsSheetOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [imageFormatBusyDocs, setImageFormatBusyDocs] = useState<Set<string>>(() => new Set());
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState | null>(null);
   const [viewerDialog, setViewerDialog] = useState<ViewerDialogState>({
     open: false,
@@ -184,13 +192,17 @@ export function App() {
       progress: 0,
     }));
     store.setJob('ingest', { status: 'running', progress: 0, message: 'Importing files...' });
-    const result = await importFiles(files, (completed, total) => {
-      usePdfStore.getState().setJob('ingest', {
-        status: 'running',
-        progress: Math.round((completed / total) * 100),
-        message: `Imported ${completed} of ${total} files...`,
-      });
-    });
+    const result = await importFiles(
+      files,
+      (completed, total) => {
+        usePdfStore.getState().setJob('ingest', {
+          status: 'running',
+          progress: Math.round((completed / total) * 100),
+          message: `Imported ${completed} of ${total} files...`,
+        });
+      },
+      usePdfStore.getState().ui.imageImportSettings,
+    );
 
     if (result.imported.length) {
       usePdfStore.getState().importDocuments(result.imported);
@@ -222,13 +234,17 @@ export function App() {
     }
 
     store.setJob('ingest', { status: 'running', progress: 0, message: 'Importing files at position...' });
-    const result = await importFiles(files, (completed, total) => {
-      usePdfStore.getState().setJob('ingest', {
-        status: 'running',
-        progress: Math.round((completed / total) * 100),
-        message: `Imported ${completed} of ${total} files...`,
-      });
-    });
+    const result = await importFiles(
+      files,
+      (completed, total) => {
+        usePdfStore.getState().setJob('ingest', {
+          status: 'running',
+          progress: Math.round((completed / total) * 100),
+          message: `Imported ${completed} of ${total} files...`,
+        });
+      },
+      usePdfStore.getState().ui.imageImportSettings,
+    );
 
     if (result.imported.length) {
       usePdfStore.getState().importDocumentsAtPosition(result.imported, targetPageId, position);
@@ -441,6 +457,44 @@ export function App() {
     }
   };
 
+  const handleImageFormatChange = async (
+    documentId: string,
+    partial: Partial<ImageImportSettings>,
+  ) => {
+    const snapshot = usePdfStore.getState();
+    const target = snapshot.documents[documentId];
+    if (!target || target.kind !== 'image' || !target.originalImageFile || !target.imageFitSettings) {
+      return;
+    }
+
+    const nextSettings: ImageImportSettings = { ...target.imageFitSettings, ...partial };
+
+    setImageFormatBusyDocs((current) => {
+      const next = new Set(current);
+      next.add(documentId);
+      return next;
+    });
+
+    try {
+      thumbnailQueue.cancelDocument(documentId);
+      const replacement = await reconvertImageDocument(target.originalImageFile, nextSettings);
+      usePdfStore.getState().applyImageDocumentReimport(documentId, replacement);
+    } catch (error) {
+      const issue = toErrorModel(error);
+      usePdfStore.getState().pushNotification({
+        tone: 'error',
+        title: 'Failed to update image format',
+        description: issue.message,
+      });
+    } finally {
+      setImageFormatBusyDocs((current) => {
+        const next = new Set(current);
+        next.delete(documentId);
+        return next;
+      });
+    }
+  };
+
   const desktopColumns = inspectorOpen
     ? documentsPaneCollapsed
       ? 'xl:grid-cols-[72px_minmax(0,1fr)_344px]'
@@ -517,6 +571,8 @@ export function App() {
             setInspectorOpen((current) => !current);
           }}
           onSearchChange={setSearchQuery}
+          imageImportSettings={store.ui.imageImportSettings}
+          onImageImportSettingsChange={store.setImageImportSettings}
         />
 
         <div className={clsx('min-h-0 flex-1 xl:grid', desktopColumns)}>
@@ -609,6 +665,8 @@ export function App() {
                 document={activeDocument}
                 onFieldChange={(fieldName, value) => activeDocument && store.updateFormField(activeDocument.id, fieldName, value)}
                 onFlattenToggle={(flatten) => activeDocument && store.setDocumentFlattening(activeDocument.id, flatten)}
+                onImageFormatChange={(documentId, partial) => void handleImageFormatChange(documentId, partial)}
+                imageFormatBusy={activeDocument ? imageFormatBusyDocs.has(activeDocument.id) : false}
               />
             </aside>
           ) : null}
