@@ -15,23 +15,22 @@ jobs:
       - name: Checkout Source
         uses: actions/checkout@v6
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: '24'
-          cache: 'npm'
-          cache-dependency-path: |
-            package-lock.json
-            apps/pdf-master/package-lock.json
+          cache: 'pnpm'
 
-      - name: Install Workspace Dependencies
-        run: npm ci
-
-      - name: Install App Dependencies
-        run: npm --prefix apps/pdf-master ci
+      - name: Install Dependencies
+        run: pnpm install
 
       - name: Build Static App
-        run: npm run build
+        run: pnpm run build
 
       - name: Push to Website Repository
         uses: cpina/github-action-push-to-another-repository@main
